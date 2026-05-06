@@ -1,0 +1,498 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>教務課務管理暨智慧調課系統</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.2/papaparse.min.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&display=swap');
+        
+        :root {
+            --print-border: #333;
+        }
+
+        body { 
+            font-family: 'Noto Sans TC', sans-serif; 
+            background-color: #f8fafc; 
+            color: #1e293b;
+        }
+
+        /* 標籤頁動畫 */
+        .tab-content { transition: opacity 0.3s ease; }
+        .tab-active { 
+            border-bottom: 3px solid #4f46e5; 
+            color: #4f46e5; 
+            background-color: #f5f3ff;
+        }
+
+        /* 課表格點優化 */
+        .schedule-grid { 
+            display: grid; 
+            grid-template-columns: 100px repeat(5, 1fr); 
+            gap: 1px; 
+            background-color: #e2e8f0; 
+            border: 2px solid #e2e8f0;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        .cell { 
+            background-color: white; 
+            min-height: 90px; 
+            display: flex; 
+            flex-direction: column; 
+            justify-content: center; 
+            align-items: center; 
+            padding: 8px;
+            font-size: 0.9rem;
+        }
+        .header-cell { 
+            background-color: #f1f5f9; 
+            font-weight: 700; 
+            color: #475569; 
+            min-height: 50px;
+        }
+        .period-label { background-color: #f8fafc; font-weight: 600; color: #64748b; }
+
+        /* 多選按鈕樣式 */
+        .period-checkbox:checked + label {
+            background-color: #4f46e5;
+            color: white;
+            border-color: #4f46e5;
+        }
+
+        /* 列印樣式優化 */
+        @media print {
+            .no-print { display: none !important; }
+            .print-only { display: block !important; }
+            body { background-color: white; padding: 0; }
+            
+            .schedule-grid { 
+                grid-template-columns: 80px repeat(5, 1fr); 
+                background-color: transparent; 
+                border: 1px solid var(--print-border);
+                border-radius: 0;
+            }
+            .cell { 
+                border: 0.5px solid #ccc; 
+                min-height: 80px;
+                color: black !important;
+            }
+            .header-cell { background-color: #eee !important; border: 1px solid var(--print-border); }
+            
+            .page-break { page-break-before: always; }
+            
+            .max-w-6xl, .max-w-4xl { max-width: 100% !important; width: 100% !important; }
+        }
+
+        .print-only { display: none; }
+    </style>
+</head>
+<body class="antialiased">
+
+    <!-- 導覽列 (僅螢幕顯示) -->
+    <nav class="bg-indigo-700 text-white shadow-lg no-print">
+        <div class="max-w-6xl mx-auto px-4 py-4 flex flex-col md:flex-row justify-between items-center gap-4">
+            <div class="flex items-center space-x-3">
+                <div class="bg-white p-2 rounded-lg">
+                    <svg class="w-6 h-6 text-indigo-700" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2-2v12a2 2 0 002 2z" /></svg>
+                </div>
+                <h1 class="text-xl font-bold tracking-tight">智慧教務管理系統 v2.1</h1>
+            </div>
+            <div class="flex items-center bg-indigo-600 rounded-full px-4 py-2 border border-indigo-500">
+                <input type="file" id="csvFile" accept=".csv" class="text-xs cursor-pointer file:mr-2 file:py-1 file:px-2 file:rounded-full file:border-0 file:text-xs file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100" />
+            </div>
+        </div>
+    </nav>
+
+    <main class="max-w-6xl mx-auto p-4 md:p-8 no-print">
+        <div id="welcomeScreen" class="text-center py-20 bg-white rounded-3xl shadow-sm border border-slate-100">
+            <h2 class="text-2xl font-bold text-slate-800 mb-4">歡迎使用</h2>
+            <p class="text-slate-500">請先於上方載入課表 CSV 檔案以開始操作</p>
+        </div>
+
+        <div id="mainUI" class="hidden">
+            <!-- 標籤切換按鈕 -->
+            <div class="flex bg-white rounded-2xl shadow-sm mb-8 border border-slate-200 overflow-hidden">
+                <button onclick="switchTab('matching')" id="tab-matching" class="flex-1 py-4 text-sm md:text-base font-medium transition tab-active">智慧調課媒合</button>
+                <button onclick="switchTab('teacher')" id="tab-teacher" class="flex-1 py-4 text-sm md:text-base font-medium transition border-l border-slate-100">教師個人課表</button>
+                <button onclick="switchTab('class')" id="tab-class" class="flex-1 py-4 text-sm md:text-base font-medium transition border-l border-slate-100">班級課表查詢</button>
+            </div>
+
+            <!-- 1. 智慧調課媒合 -->
+            <section id="content-matching" class="tab-content">
+                <div class="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 mb-8">
+                    <div class="grid grid-cols-1 md:grid-cols-12 gap-6">
+                        <div class="md:col-span-3 space-y-2">
+                            <label class="text-sm font-bold text-slate-600">請假老師</label>
+                            <select id="matchTeacher" class="w-full bg-slate-50 border-0 p-3 rounded-xl focus:ring-2 focus:ring-indigo-500 t-select"></select>
+                        </div>
+                        <div class="md:col-span-2 space-y-2">
+                            <label class="text-sm font-bold text-slate-600">請假星期</label>
+                            <select id="leaveDay" class="w-full bg-slate-50 border-0 p-3 rounded-xl focus:ring-2 focus:ring-indigo-500">
+                                <option value="1">星期一</option><option value="2">星期二</option><option value="3">星期三</option><option value="4">星期四</option><option value="5">星期五</option>
+                            </select>
+                        </div>
+                        <div class="md:col-span-5 space-y-2">
+                            <label class="text-sm font-bold text-slate-600">請假節次 (可多選)</label>
+                            <div class="grid grid-cols-4 gap-2">
+                                <template id="period-template">
+                                    <input type="checkbox" id="p-{n}" value="{n}" class="hidden period-checkbox">
+                                    <label for="p-{n}" class="flex items-center justify-center py-2 border-2 border-slate-100 rounded-xl cursor-pointer text-sm font-medium hover:bg-slate-50 transition-colors">第{n}節</label>
+                                </template>
+                                <div id="periodsGrid" class="contents"></div>
+                            </div>
+                        </div>
+                        <div class="md:col-span-2 flex items-end">
+                            <button onclick="startMatching()" class="w-full bg-indigo-600 text-white font-bold py-3 rounded-xl hover:bg-indigo-700 shadow-lg shadow-indigo-200 transition transform active:scale-95">搜尋建議</button>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="resultsControl" class="hidden flex justify-between items-center mb-6">
+                    <h3 class="text-lg font-bold text-slate-800">媒合建議清單 <span id="matchCount" class="text-indigo-600 ml-2"></span></h3>
+                    <button onclick="window.print()" class="bg-emerald-600 text-white px-6 py-2.5 rounded-full hover:bg-emerald-700 transition flex items-center font-bold shadow-md">
+                        <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" /></svg>
+                        列印勾選建議
+                    </button>
+                </div>
+                <div id="matchResults" class="space-y-8"></div>
+            </section>
+
+            <!-- 2. 教師課表頁面 -->
+            <section id="content-teacher" class="tab-content hidden">
+                <div class="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 mb-8">
+                    <div class="flex flex-col md:flex-row md:items-end justify-between gap-6">
+                        <div class="w-full md:max-w-xs space-y-2">
+                            <label class="text-sm font-bold text-slate-600">選擇教師</label>
+                            <select id="viewTeacher" onchange="renderTeacherSchedule()" class="w-full bg-slate-50 border-0 p-3 rounded-xl focus:ring-2 focus:ring-indigo-500 t-select"></select>
+                        </div>
+                        <button onclick="window.print()" class="bg-slate-800 text-white px-8 py-3 rounded-xl hover:bg-slate-900 transition flex items-center font-bold">
+                            <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" /></svg>
+                            列印教師課表
+                        </button>
+                    </div>
+                </div>
+                <div id="teacherScheduleUI" class="bg-white p-8 rounded-2xl shadow-sm border border-slate-200 overflow-x-auto">
+                    <div id="teacherScheduleGrid" class="schedule-grid"></div>
+                </div>
+            </section>
+
+            <!-- 3. 班級課表頁面 -->
+            <section id="content-class" class="tab-content hidden">
+                <div class="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 mb-8">
+                    <div class="flex flex-col md:flex-row md:items-end justify-between gap-6">
+                        <div class="w-full md:max-w-xs space-y-2">
+                            <label class="text-sm font-bold text-slate-600">選擇班級</label>
+                            <select id="viewClass" onchange="renderClassSchedule()" class="w-full bg-slate-50 border-0 p-3 rounded-xl focus:ring-2 focus:ring-indigo-500"></select>
+                        </div>
+                        <button onclick="window.print()" class="bg-slate-800 text-white px-8 py-3 rounded-xl hover:bg-slate-900 transition flex items-center font-bold">
+                            <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" /></svg>
+                            列印班級課表
+                        </button>
+                    </div>
+                </div>
+                <div id="classScheduleUI" class="bg-white p-8 rounded-2xl shadow-sm border border-slate-200 overflow-x-auto">
+                    <div id="classScheduleGrid" class="schedule-grid"></div>
+                </div>
+            </section>
+        </div>
+    </main>
+
+    <!-- 列印專用區域 -->
+    <div class="print-only p-8">
+        <div id="p-match-header" class="hidden text-center">
+            <h1 class="text-3xl font-bold mb-2">調課媒合申請表</h1>
+            <p class="text-slate-600 mb-6 border-b-2 border-black pb-4">教師調課媒合建議 (自動搜尋跨日空堂結果)</p>
+            <div class="grid grid-cols-2 text-left mb-6 gap-4 font-medium">
+                <div class="border p-2">申請老師：<span id="p-me" class="font-bold underline"></span></div>
+                <div class="border p-2">製表日期：<span id="p-now"></span></div>
+            </div>
+        </div>
+
+        <div id="p-schedule-header" class="hidden text-center mb-6">
+            <h1 class="text-3xl font-bold" id="p-title">課表查詢結果</h1>
+            <p class="mt-2 text-slate-500">列印時間：<span id="p-time"></span></p>
+        </div>
+
+        <div id="p-container"></div>
+
+        <div id="p-footer" class="mt-16 grid grid-cols-3 gap-12 text-center font-bold">
+            <div class="border-t-2 border-black pt-4">教務主任</div>
+            <div class="border-t-2 border-black pt-4">教學組長</div>
+            <div class="border-t-2 border-black pt-4">申請人簽章</div>
+        </div>
+    </div>
+
+    <script>
+        let rawData = []; 
+        let teachers = [];
+        let classes = [];
+        let selectedCards = new Set(); // 格式: "match-{period}-{index}"
+        let currentTab = 'matching';
+
+        // 初始化節次選單
+        window.onload = () => {
+            const grid = document.getElementById('periodsGrid');
+            const template = document.getElementById('period-template').innerHTML;
+            for(let i=1; i<=8; i++) {
+                grid.innerHTML += template.replace(/{n}/g, i);
+            }
+        };
+
+        document.getElementById('csvFile').addEventListener('change', e => {
+            const file = e.target.files[0];
+            if (!file) return;
+            Papa.parse(file, {
+                header: false,
+                complete: results => {
+                    processCSV(results.data);
+                    document.getElementById('welcomeScreen').classList.add('hidden');
+                    document.getElementById('mainUI').classList.remove('hidden');
+                }
+            });
+        });
+
+        function processCSV(data) {
+            rawData = [];
+            let tSet = new Set();
+            let cSet = new Set();
+            for (let i = 6; i < data.length; i++) {
+                const row = data[i];
+                if (!row || !row[0]) continue;
+                const tName = row[0].replace(/\n/g, ' ').trim();
+                if (tName === "教師" || tName.includes("市立")) continue;
+                tSet.add(tName);
+                for (let d = 1; d <= 5; d++) {
+                    for (let p = 1; p <= 8; p++) {
+                        const cell = row[3 + (d - 1) * 8 + (p - 1)];
+                        if (cell && cell.trim()) {
+                            const lines = cell.split('\n');
+                            const sub = lines[0].trim();
+                            const cls = lines[1] ? lines[1].trim() : "未知";
+                            cSet.add(cls);
+                            rawData.push({ teacher: tName, day: d, period: p, subject: sub, className: cls });
+                        }
+                    }
+                }
+            }
+            teachers = Array.from(tSet).sort();
+            classes = Array.from(cSet).sort();
+            document.querySelectorAll('.t-select').forEach(s => {
+                s.innerHTML = teachers.map(t => `<option value="${t}">${t}</option>`).join('');
+            });
+            document.getElementById('viewClass').innerHTML = classes.map(c => `<option value="${c}">${c}</option>`).join('');
+            renderTeacherSchedule();
+            renderClassSchedule();
+        }
+
+        function switchTab(id) {
+            currentTab = id;
+            document.querySelectorAll('.tab-content').forEach(c => c.classList.add('hidden'));
+            document.querySelectorAll('[id^="tab-"]').forEach(t => t.classList.remove('tab-active'));
+            document.getElementById('content-' + id).classList.remove('hidden');
+            document.getElementById('tab-' + id).classList.add('tab-active');
+            preparePrintContent();
+        }
+
+        // 媒合邏輯 (多節次)
+        function startMatching() {
+            const me = document.getElementById('matchTeacher').value;
+            const d = parseInt(document.getElementById('leaveDay').value);
+            const resDiv = document.getElementById('matchResults');
+            
+            // 獲取所有勾選的節次
+            const selectedPeriods = Array.from(document.querySelectorAll('.period-checkbox:checked')).map(cb => parseInt(cb.value));
+            
+            if (selectedPeriods.length === 0) {
+                alert("請至少選擇一個請假節次。");
+                return;
+            }
+
+            resDiv.innerHTML = "";
+            selectedCards.clear();
+            let totalMatchCount = 0;
+
+            document.getElementById('p-me').innerText = me;
+            document.getElementById('p-now').innerText = new Date().toLocaleDateString('zh-TW');
+
+            selectedPeriods.forEach(p => {
+                const mySess = rawData.find(s => s.teacher === me && s.day === d && s.period === p);
+                
+                // 每個節次的區塊
+                const periodSection = document.createElement('div');
+                periodSection.className = "period-group mb-8";
+                
+                let headerHtml = `
+                    <div class="flex items-center space-x-3 mb-4">
+                        <span class="bg-indigo-600 text-white px-4 py-1 rounded-lg font-bold">第 ${p} 節</span>
+                        <h4 class="text-slate-700 font-bold">
+                            ${mySess ? `原課：${mySess.subject} (${mySess.className})` : '<span class="text-red-500">此節次您無排課</span>'}
+                        </h4>
+                    </div>`;
+                
+                if (!mySess) {
+                    periodSection.innerHTML = headerHtml;
+                    resDiv.appendChild(periodSection);
+                    return;
+                }
+
+                const matches = rawData.filter(s => s.className === mySess.className && s.day !== d);
+                let cardsHtml = `<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">`;
+                let foundAny = false;
+
+                matches.forEach((other, idx) => {
+                    const isOtherBusy = rawData.some(s => s.teacher === other.teacher && s.day === d && s.period === p);
+                    const amIBusy = rawData.some(s => s.teacher === me && s.day === other.day && s.period === other.period);
+
+                    if (!isOtherBusy && !amIBusy) {
+                        foundAny = true;
+                        totalMatchCount++;
+                        const id = `match-${p}-${idx}`;
+                        cardsHtml += `
+                            <div id="${id}" onclick="toggleMatch('${id}', ${p}, '${mySess.subject}', '${mySess.className}', '${other.teacher}', ${other.day}, ${other.period}, '${other.subject}')" class="bg-white p-6 rounded-2xl border-2 border-slate-100 cursor-pointer hover:border-indigo-300 hover:shadow-md transition-all group relative">
+                                <div class="flex justify-between items-start mb-4">
+                                    <span class="text-xs font-bold bg-indigo-50 text-indigo-600 px-3 py-1 rounded-full uppercase tracking-wider">建議方案</span>
+                                    <input type="checkbox" id="chk-${id}" class="w-5 h-5 rounded-md border-slate-300 text-indigo-600 pointer-events-none">
+                                </div>
+                                <h4 class="text-xl font-bold text-slate-800 mb-1 group-hover:text-indigo-700">${other.teacher}</h4>
+                                <div class="space-y-2 mt-4 text-sm">
+                                    <div class="flex justify-between border-b border-slate-50 pb-2">
+                                        <span class="text-slate-500">對調至：</span>
+                                        <span class="font-bold text-indigo-600">星期${numToDay(other.day)} 第${other.period}節</span>
+                                    </div>
+                                    <div class="flex justify-between border-b border-slate-50 pb-2">
+                                        <span class="text-slate-500">對應課程：</span>
+                                        <span class="text-slate-700 font-medium">${other.subject}</span>
+                                    </div>
+                                </div>
+                            </div>`;
+                    }
+                });
+
+                cardsHtml += foundAny ? "</div>" : `<div class="text-slate-400 italic py-4">此節次查無合適對調對象。</div>`;
+                periodSection.innerHTML = headerHtml + cardsHtml;
+                resDiv.appendChild(periodSection);
+            });
+
+            document.getElementById('resultsControl').classList.remove('hidden');
+            document.getElementById('matchCount').innerText = `${totalMatchCount} 個可行方案`;
+            preparePrintContent();
+        }
+
+        // 修改後的點擊處理，儲存更多資料以便列印
+        let matchDataStore = {}; 
+
+        function toggleMatch(id, leaveP, leaveSub, leaveCls, targetT, targetD, targetP, targetSub) {
+            const card = document.getElementById(id);
+            const chk = document.getElementById('chk-' + id);
+            
+            if (selectedCards.has(id)) {
+                selectedCards.delete(id);
+                delete matchDataStore[id];
+                card.classList.remove('border-indigo-500', 'bg-indigo-50');
+                chk.checked = false;
+            } else {
+                selectedCards.add(id);
+                matchDataStore[id] = { leaveP, leaveSub, leaveCls, targetT, targetD, targetP, targetSub };
+                card.classList.add('border-indigo-500', 'bg-indigo-50');
+                chk.checked = true;
+            }
+            preparePrintContent();
+        }
+
+        // 課表渲染
+        function renderTeacherSchedule() {
+            const name = document.getElementById('viewTeacher').value;
+            const courses = rawData.filter(s => s.teacher === name);
+            renderGrid(document.getElementById('teacherScheduleGrid'), courses, s => `
+                <div class="text-indigo-700 font-bold">${s.subject}</div>
+                <div class="text-slate-400 text-[10px] mt-1">${s.className}</div>
+            `);
+            preparePrintContent();
+        }
+
+        function renderClassSchedule() {
+            const cls = document.getElementById('viewClass').value;
+            const courses = rawData.filter(s => s.className === cls);
+            renderGrid(document.getElementById('classScheduleGrid'), courses, s => `
+                <div class="text-slate-800 font-bold">${s.subject}</div>
+                <div class="text-indigo-500 text-[10px] font-medium mt-1">${s.teacher.split(' ').pop()}</div>
+            `);
+            preparePrintContent();
+        }
+
+        function renderGrid(container, courses, drawFn) {
+            let html = `<div class="header-cell cell">節次 / 星期</div>`;
+            for (let d = 1; d <= 5; d++) html += `<div class="header-cell cell">星期${numToDay(d)}</div>`;
+            for (let p = 1; p <= 8; p++) {
+                html += `<div class="period-label cell">第 ${p} 節</div>`;
+                for (let d = 1; d <= 5; d++) {
+                    const found = courses.find(s => s.day === d && s.period === p);
+                    html += `<div class="cell">${found ? drawFn(found) : '<span class="text-slate-100 font-light text-xs">---</span>'}</div>`;
+                }
+            }
+            container.innerHTML = html;
+        }
+
+        // 處理列印準備
+        function preparePrintContent() {
+            const pContainer = document.getElementById('p-container');
+            const pMatchHead = document.getElementById('p-match-header');
+            const pSchedHead = document.getElementById('p-schedule-header');
+            const pFooter = document.getElementById('p-footer');
+            
+            pContainer.innerHTML = "";
+            pMatchHead.classList.add('hidden');
+            pSchedHead.classList.add('hidden');
+            pFooter.classList.add('hidden');
+
+            if (currentTab === 'matching') {
+                pMatchHead.classList.remove('hidden');
+                pFooter.classList.remove('hidden');
+                
+                // 按照節次分組列印
+                const leaveDayText = numToDay(parseInt(document.getElementById('leaveDay').value));
+                
+                selectedCards.forEach(id => {
+                    const data = matchDataStore[id];
+                    const item = document.createElement('div');
+                    item.className = "border border-black p-4 mb-4 bg-white page-break-inside-avoid";
+                    item.innerHTML = `
+                        <div class="flex justify-between border-b border-gray-200 pb-2 mb-2">
+                            <span class="font-bold text-lg">【星期${leaveDayText} 第 ${data.leaveP} 節】代換申請</span>
+                            <span class="text-sm font-medium">原課：${data.leaveSub} (${data.leaveCls})</span>
+                        </div>
+                        <div class="grid grid-cols-2 gap-4">
+                            <div>
+                                <p class="text-xs text-gray-500 uppercase">對調老師</p>
+                                <p class="font-bold text-xl">${data.targetT}</p>
+                            </div>
+                            <div>
+                                <p class="text-xs text-gray-500 uppercase">對調至時段</p>
+                                <p class="font-bold text-indigo-700">星期${numToDay(data.targetD)} 第${data.targetP}節</p>
+                            </div>
+                        </div>
+                    `;
+                    pContainer.appendChild(item);
+                });
+            } else if (currentTab === 'teacher') {
+                pSchedHead.classList.remove('hidden');
+                document.getElementById('p-title').innerText = document.getElementById('viewTeacher').value + " 教師個人課表";
+                document.getElementById('p-time').innerText = new Date().toLocaleString();
+                const gridClone = document.getElementById('teacherScheduleGrid').cloneNode(true);
+                pContainer.appendChild(gridClone);
+            } else if (currentTab === 'class') {
+                pSchedHead.classList.remove('hidden');
+                document.getElementById('p-title').innerText = document.getElementById('viewClass').value + " 班級課表";
+                document.getElementById('p-time').innerText = new Date().toLocaleString();
+                const gridClone = document.getElementById('classScheduleGrid').cloneNode(true);
+                pContainer.appendChild(gridClone);
+            }
+        }
+
+        function numToDay(n) { return {1:'一', 2:'二', 3:'三', 4:'四', 5:'五'}[n] || n; }
+    </script>
+</body>
+</html>
